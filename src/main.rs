@@ -5,7 +5,7 @@ use std::ffi::CStr;
 use std::process::Command;
 use std::{thread, ptr};
 use tokio::runtime::Runtime;
-use warp::Filter;
+use warp::{Filter, Reply};
 
 #[allow(bad_style)]
 pub mod fswatch_sys {
@@ -58,16 +58,30 @@ fn setup_fswatch() {
     }
 }
 
-async fn handle_request(name: String) -> Result<String, Box<dyn std::error::Error>> {
+async fn handle_request(name: String) -> Result<Box<dyn warp::Reply>, Box<dyn std::error::Error>> {
     println!("received request for {:?}", name);
     if name.ends_with(".rs") {
         let output = tokio::task::spawn_blocking(move || {
-            // TODO: prevent directory traversal
+            // It seems to be the case that warp's path machinery handles dots and slashes for us, so there's no directory traversal
             Command::new("cargo-script").args(&["script", &format!("cgiscripts/{}", name)]).output()
         }).await??;
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        let output = String::from_utf8_lossy(&output.stdout).to_string();
+        if let Some(end_header_index) = output.find("\n\n") {
+            let mut resp = output[end_header_index+2..].to_string().into_response();
+            for line in output[..end_header_index].split("\n") {
+                let parts = line.split(":").map(|x| x.to_string()).collect::<Vec<String>>();
+                if parts.len() == 2 {
+                    resp.headers_mut().insert(http::header::HeaderName::from_bytes(parts[0].as_bytes())?, parts[1].parse()?);
+                }
+            }
+            Ok(Box::new(resp))
+        } else {
+            let mut output = output.into_response();
+            output.headers_mut().insert("Content-type", "text/plain".parse()?);
+            Ok(Box::new(output))
+        }
     } else {
-        Err("404")?
+        Ok(Box::new(warp::reply::with_status(format!("File {:?} not found", name), http::StatusCode::NOT_FOUND)))
     }
 }
 

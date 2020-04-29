@@ -7,6 +7,7 @@ edition = "2018"
 [dependencies]
 futures = "0.3"
 futures-util = "0.3"
+http = "0.2"
 tokio = { version = "0.2", features = ["time"] }
 warp = "0.2"
 
