@@ -1,11 +1,21 @@
+use futures::{future, Future};
+use futures_util::future::TryFutureExt;
 use std::collections::HashSet;
 use std::ffi::CStr;
 use std::process::Command;
-use std::ptr;
+use std::{thread, ptr};
+use tokio::runtime::Runtime;
+use warp::Filter;
 
 #[allow(bad_style)]
 pub mod fswatch_sys {
     include!(concat!(env!("OUT_DIR"), "/fswatch_sys.rs"));
+}
+
+fn cache_script(path: &str) {
+    if let Err(e) = Command::new("cargo-script").args(&["script", "--build-only", &path]).spawn() {
+        eprintln!("Failed to use cargo-script to compile-cache {}: {:?}", path, e);
+    }
 }
 
 extern "C" fn process_script_changes(events_ptr: *const fswatch_sys::fsw_cevent, events_len: u32, _data: *mut std::ffi::c_void) {
@@ -29,13 +39,11 @@ extern "C" fn process_script_changes(events_ptr: *const fswatch_sys::fsw_cevent,
     }
     println!("to_cache: {:?}", to_cache);
     for file in to_cache {
-        if let Err(e) = Command::new("cargo-script").args(&["script", "--build-only", &file]).spawn() {
-            eprintln!("Failed to use cargo-script to compile-cache {}: {:?}", file, e);
-        }
+        cache_script(&file);
     }
 }
 
-fn main() {
+fn setup_fswatch() {
     if unsafe { fswatch_sys::fsw_init_library() } != fswatch_sys::FSW_OK as i32 {
         eprintln!("fsw_init_library failed");
         return;
@@ -48,4 +56,33 @@ fn main() {
         fsw_set_callback(handle, Some(process_script_changes), ptr::null_mut());
         fsw_start_monitor(handle);
     }
+}
+
+async fn handle_request(name: String) -> Result<String, Box<dyn std::error::Error>> {
+    println!("received request for {:?}", name);
+    if name.ends_with(".rs") {
+        let output = tokio::task::spawn_blocking(move || {
+            // TODO: prevent directory traversal
+            Command::new("cargo-script").args(&["script", &format!("cgiscripts/{}", name)]).output()
+        }).await??;
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        Err("404")?
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // TODO: populate cache on already-existing scripts
+
+    thread::spawn(setup_fswatch);
+
+    let wildcard = warp::path::param::<String>().and(warp::path::end()).and_then(|name| handle_request(name).map_err(|_| warp::reject::not_found()));
+    let index = warp::path::end().and_then(|| handle_request("index.rs".into()).map_err(|_| warp::reject::not_found()));
+
+    let router = wildcard.or(index);
+
+    let mut runtime = Runtime::new()?;
+    let ip = ([127, 0, 0, 1], 3000);
+    runtime.block_on(warp::serve(router).run(ip));
+    Ok(())
 }
