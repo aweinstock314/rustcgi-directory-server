@@ -1,4 +1,8 @@
 # rustcgi-directory-server
+# Dependencies
+
+- `rustcgi-directory-server` assumes that `cargo-script` is installed, which can be done with `cargo install cargo-script`.
+- The `fswatch` C library is a dependency. This repo's `Makefile` should fetch it as a submodule and compile it.
 
 # Discussion of the design considerations
 ```
