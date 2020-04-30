@@ -4,15 +4,14 @@ use std::env;
 const HEADER_NAME: &'static str = "fswatch/libfswatch/src/libfswatch/c/libfswatch.h";
 const LIBRARY_PATH: &'static str = "fswatch/libfswatch/src/libfswatch/.libs/";
 
-#[cfg(any(target_os="macos", target_os="freebsd"))]
-const CPP_LIB: &'static str = "c++";
-#[cfg(target_os="linux")]
-const CPP_LIB: &'static str = "stdc++";
-// no fallthrough case: to support more OSes, add their default C++ library here
-// an error about CPP_LIB being undefined should lead right here, but the linker errors could be much more confusing
-
 fn main() {
-    for lib in &["fswatch", CPP_LIB] {
+    let cpp_lib = match &*env::var("CARGO_CFG_TARGET_OS").unwrap() {
+        "macos" | "freebsd" => "c++",
+        "linux" => "stdc++",
+        other => panic!("Haven't yet researched which C++ standard library to link with on TARGET_OS {}", other),
+    };
+
+    for lib in &["fswatch", cpp_lib] {
         println!("cargo:rustc-link-lib=static={}", lib);
     }
     println!("cargo:rerun-if-changed={}", HEADER_NAME);
