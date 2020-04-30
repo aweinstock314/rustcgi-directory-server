@@ -1,6 +1,7 @@
 use futures::{future, Future};
 use futures_util::future::TryFutureExt;
-use std::collections::HashSet;
+use http::HeaderMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::CStr;
 use std::process::Command;
 use std::{thread, ptr};
@@ -58,13 +59,30 @@ fn setup_fswatch() {
     }
 }
 
-async fn handle_request(name: String) -> Result<Box<dyn warp::Reply>, Box<dyn std::error::Error>> {
+async fn handle_request(name: String, headers: HeaderMap) -> Result<Box<dyn warp::Reply>, Box<dyn std::error::Error>> {
     println!("received request for {:?}", name);
     if name.ends_with(".rs") {
         let output = tokio::task::spawn_blocking(move || {
             // It seems to be the case that warp's path machinery handles dots and slashes for us, so there's no directory traversal
-            Command::new("cargo-script").args(&["script", &format!("cgiscripts/{}", name)]).output()
+            let script_path = format!("cgiscripts/{}", name);
+            let mut header_vars = HashMap::new();
+            for (k, v) in headers.iter() {
+                let mut name = format!("HTTP_{}", k.as_str());
+                name.make_ascii_uppercase();
+                use std::os::unix::ffi::OsStrExt;
+                header_vars.insert(name, std::ffi::OsStr::from_bytes(v.as_bytes()));
+            }
+            Command::new("cargo-script")
+                .args(&["script", &script_path])
+                .env_clear()
+                .env("PATH", std::env::var("PATH").expect("PATH was unset"))
+                .env("HOME", std::env::var("HOME").expect("HOME was unset"))
+                .envs(header_vars)
+                .output()
         }).await??;
+        if output.stderr.len() != 0 {
+            println!("program had nontrivial stderr: {:?}", String::from_utf8_lossy(&output.stderr));
+        }
         let output = String::from_utf8_lossy(&output.stdout).to_string();
         if let Some(end_header_index) = output.find("\n\n") {
             let mut resp = output[end_header_index+2..].to_string().into_response();
@@ -85,13 +103,20 @@ async fn handle_request(name: String) -> Result<Box<dyn warp::Reply>, Box<dyn st
     }
 }
 
+async fn handle_request_error_wrapper(name: String, headers:  HeaderMap) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
+    handle_request(name, headers).await.map_err(|e| {
+        println!("Internal error: {:?}", e);
+        warp::reject::not_found()
+    })
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // TODO: populate cache on already-existing scripts
 
     thread::spawn(setup_fswatch);
 
-    let wildcard = warp::path::param::<String>().and(warp::path::end()).and_then(|name| handle_request(name).map_err(|_| warp::reject::not_found()));
-    let index = warp::path::end().and_then(|| handle_request("index.rs".into()).map_err(|_| warp::reject::not_found()));
+    let wildcard = warp::path::param::<String>().and(warp::path::end()).and(warp::header::headers_cloned()).and_then(handle_request_error_wrapper);
+    let index = warp::path::end().and(warp::header::headers_cloned()).and_then(|headers| handle_request_error_wrapper("index.rs".into(), headers));
 
     let router = wildcard.or(index);
 
