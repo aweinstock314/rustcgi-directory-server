@@ -1,4 +1,11 @@
 # rustcgi-directory-server
+# Installation
+
+- `git clone https://github.com/aweinstock314/rustcgi-directory-server && cd rustcgi-directory-server && make` should automatically fetch `fswatch` and any Rust dependencies before building
+- The `build.rs` assumes that "libstdc++.a" (on GNU/Linux) or "libc++.a" (on MacOS/FreeBSD) is in a path known to the system linker: this is required since `fswatch` is a C++ library.
+- - On Debian, `libstdc++` is provided by the `libstdc++-6-dev` package (or possibly another version)
+- - On MacOS, according to https://trac.macports.org/wiki/LibcxxOnOlderSystems, `libc++` should be provided by the `libcxx` package
+
 # Dependencies
 
 - `rustcgi-directory-server` assumes that `cargo-script` is installed, which can be done with `cargo install cargo-script`.
